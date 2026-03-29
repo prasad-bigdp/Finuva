@@ -1,0 +1,9 @@
+{
+  "/(dashboard)/invoices/new/page": "app/(dashboard)/invoices/new/page.js",
+  "/(dashboard)/recurring/page": "app/(dashboard)/recurring/page.js",
+  "/(dashboard)/payments/page": "app/(dashboard)/payments/page.js",
+  "/(dashboard)/invoices/page": "app/(dashboard)/invoices/page.js",
+  "/(dashboard)/dashboard/page": "app/(dashboard)/dashboard/page.js",
+  "/(dashboard)/expenses/page": "app/(dashboard)/expenses/page.js",
+  "/(dashboard)/time/page": "app/(dashboard)/time/page.js"
+}

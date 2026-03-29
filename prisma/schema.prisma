@@ -1,0 +1,400 @@
+// ─── Prisma Schema ────────────────────────────────────────────────────────────
+// Multi-tenant Zoho Invoice clone — all data scoped by organizationId
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  // Neon recommends directUrl for migrations
+  directUrl = env("DIRECT_URL")
+}
+
+// ─── Organization ─────────────────────────────────────────────────────────────
+model Organization {
+  id          String   @id @default(cuid())
+  name        String
+  email       String?
+  phone       String?
+  address     String?
+  city        String?
+  state       String?
+  country     String   @default("India")
+  pincode     String?
+  gstin       String?
+  pan         String?
+  logo        String?
+  currency    String   @default("INR")
+  timezone    String   @default("Asia/Kolkata")
+  invoicePrefix String  @default("INV")
+  invoiceCounter Int    @default(1)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  users             User[]
+  customers         Customer[]
+  items             Item[]
+  invoices          Invoice[]
+  payments          Payment[]
+  recurringInvoices RecurringInvoice[]
+  expenses          Expense[]
+
+  @@map("organizations")
+}
+
+// ─── User ─────────────────────────────────────────────────────────────────────
+model User {
+  id             String   @id @default(cuid())
+  name           String
+  email          String   @unique
+  password       String   // bcrypt hash
+  role           UserRole @default(STAFF)
+  organizationId String
+  emailVerified  DateTime?
+  image          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  sessions     Session[]
+  accounts     Account[]
+
+  @@index([organizationId])
+  @@map("users")
+}
+
+enum UserRole {
+  ADMIN
+  STAFF
+}
+
+// ─── NextAuth models ──────────────────────────────────────────────────────────
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
+}
+
+// ─── Customer ─────────────────────────────────────────────────────────────────
+model Customer {
+  id             String   @id @default(cuid())
+  organizationId String
+  displayName    String
+  companyName    String?
+  email          String?
+  phone          String?
+  website        String?
+  gstin          String?
+  pan            String?
+  // Billing address
+  billingAddress String?
+  billingCity    String?
+  billingState   String?
+  billingCountry String   @default("India")
+  billingPincode String?
+  // Shipping address
+  shippingAddress String?
+  shippingCity    String?
+  shippingState   String?
+  shippingCountry String?
+  shippingPincode String?
+  // Balance
+  outstandingBalance Decimal @default(0) @db.Decimal(12, 2)
+  notes          String?
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization      Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invoices          Invoice[]
+  payments          Payment[]
+  recurringInvoices RecurringInvoice[]
+  expenses          Expense[]
+
+  @@index([organizationId])
+  @@index([email])
+  @@map("customers")
+}
+
+// ─── Item (Product / Service) ─────────────────────────────────────────────────
+model Item {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  description    String?
+  type           ItemType @default(SERVICE)
+  sku            String?
+  unit           String?  // hrs, pcs, kg, etc.
+  rate           Decimal  @db.Decimal(12, 2)
+  taxRate        Decimal  @default(0) @db.Decimal(5, 2)  // e.g. 18.00
+  hsnSac         String?  // HSN for goods, SAC for services
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invoiceItems InvoiceItem[]
+
+  @@index([organizationId])
+  @@map("items")
+}
+
+enum ItemType {
+  PRODUCT
+  SERVICE
+}
+
+// ─── Invoice ──────────────────────────────────────────────────────────────────
+model Invoice {
+  id             String        @id @default(cuid())
+  organizationId String
+  customerId     String
+  invoiceNumber  String
+  status         InvoiceStatus @default(DRAFT)
+  issueDate      DateTime      @default(now())
+  dueDate        DateTime
+  // Amounts (stored in base currency)
+  subtotal       Decimal       @db.Decimal(12, 2)
+  discountType   DiscountType  @default(PERCENT)
+  discountValue  Decimal       @default(0) @db.Decimal(12, 2)
+  discountAmount Decimal       @default(0) @db.Decimal(12, 2)
+  // GST breakdown
+  cgst           Decimal       @default(0) @db.Decimal(12, 2)
+  sgst           Decimal       @default(0) @db.Decimal(12, 2)
+  igst           Decimal       @default(0) @db.Decimal(12, 2)
+  totalTax       Decimal       @default(0) @db.Decimal(12, 2)
+  total          Decimal       @db.Decimal(12, 2)
+  amountPaid     Decimal       @default(0) @db.Decimal(12, 2)
+  balanceDue     Decimal       @db.Decimal(12, 2)
+  // Meta
+  currency       String        @default("INR")
+  notes          String?
+  terms          String?
+  placeOfSupply  String?       // For GST — state code
+  isInterState   Boolean       @default(false)
+  pdfUrl         String?
+  sentAt         DateTime?
+  viewedAt       DateTime?
+  recurringId    String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer     Customer      @relation(fields: [customerId], references: [id])
+  items        InvoiceItem[]
+  payments     Payment[]
+
+  @@unique([organizationId, invoiceNumber])
+  @@index([organizationId])
+  @@index([customerId])
+  @@index([status])
+  @@index([dueDate])
+  @@map("invoices")
+}
+
+enum InvoiceStatus {
+  DRAFT
+  SENT
+  VIEWED
+  PARTIALLY_PAID
+  PAID
+  OVERDUE
+  CANCELLED
+  VOID
+}
+
+enum DiscountType {
+  PERCENT
+  FIXED
+}
+
+// ─── InvoiceItem ──────────────────────────────────────────────────────────────
+model InvoiceItem {
+  id          String   @id @default(cuid())
+  invoiceId   String
+  itemId      String?
+  name        String
+  description String?
+  quantity    Decimal  @db.Decimal(10, 3)
+  unit        String?
+  rate        Decimal  @db.Decimal(12, 2)
+  discount    Decimal  @default(0) @db.Decimal(5, 2) // %
+  taxRate     Decimal  @default(0) @db.Decimal(5, 2) // %
+  taxAmount   Decimal  @default(0) @db.Decimal(12, 2)
+  amount      Decimal  @db.Decimal(12, 2)
+  hsnSac      String?
+  sortOrder   Int      @default(0)
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  item    Item?   @relation(fields: [itemId], references: [id])
+
+  @@index([invoiceId])
+  @@map("invoice_items")
+}
+
+// ─── Payment ──────────────────────────────────────────────────────────────────
+model Payment {
+  id             String        @id @default(cuid())
+  organizationId String
+  invoiceId      String
+  customerId     String
+  amount         Decimal       @db.Decimal(12, 2)
+  paymentDate    DateTime      @default(now())
+  method         PaymentMethod @default(BANK_TRANSFER)
+  reference      String?       // cheque no, UTR, etc.
+  notes          String?
+  // Gateway fields (for future Razorpay / Stripe integration)
+  gatewayId      String?
+  gatewayStatus  String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invoice      Invoice      @relation(fields: [invoiceId], references: [id])
+  customer     Customer     @relation(fields: [customerId], references: [id])
+
+  @@index([organizationId])
+  @@index([invoiceId])
+  @@map("payments")
+}
+
+enum PaymentMethod {
+  CASH
+  CHEQUE
+  BANK_TRANSFER
+  UPI
+  CARD
+  RAZORPAY
+  STRIPE
+  OTHER
+}
+
+// ─── RecurringInvoice ─────────────────────────────────────────────────────────
+model RecurringInvoice {
+  id              String            @id @default(cuid())
+  organizationId  String
+  customerId      String
+  status          RecurringStatus   @default(ACTIVE)
+  frequency       RecurringFrequency
+  startDate       DateTime
+  endDate         DateTime?
+  nextRunDate     DateTime
+  lastRunDate     DateTime?
+  invoicesCreated Int               @default(0)
+  // Template data (stored as JSON)
+  templateData    Json
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer     Customer     @relation(fields: [customerId], references: [id])
+
+  @@index([organizationId])
+  @@index([nextRunDate])
+  @@map("recurring_invoices")
+}
+
+enum RecurringStatus {
+  ACTIVE
+  PAUSED
+  EXPIRED
+  CANCELLED
+}
+
+enum RecurringFrequency {
+  DAILY
+  WEEKLY
+  BIWEEKLY
+  MONTHLY
+  QUARTERLY
+  HALF_YEARLY
+  YEARLY
+}
+
+// ─── Expense ──────────────────────────────────────────────────────────────────
+model Expense {
+  id             String        @id @default(cuid())
+  organizationId String
+  customerId     String?       // if billable to a customer
+  category       String
+  amount         Decimal       @db.Decimal(12, 2)
+  taxAmount      Decimal       @default(0) @db.Decimal(12, 2)
+  totalAmount    Decimal       @db.Decimal(12, 2)
+  expenseDate    DateTime      @default(now())
+  vendor         String?
+  reference      String?
+  notes          String?
+  receiptUrl     String?
+  isBillable     Boolean       @default(false)
+  status         ExpenseStatus @default(UNBILLED)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer     Customer?    @relation(fields: [customerId], references: [id])
+
+  @@index([organizationId])
+  @@index([expenseDate])
+  @@map("expenses")
+}
+
+enum ExpenseStatus {
+  UNBILLED
+  BILLED
+  REIMBURSED
+}
+
+// ─── TimeEntry ────────────────────────────────────────────────────────────────
+model TimeEntry {
+  id             String   @id @default(cuid())
+  organizationId String
+  description    String
+  hours          Decimal  @db.Decimal(8, 2)
+  rate           Decimal  @db.Decimal(12, 2)
+  amount         Decimal  @db.Decimal(12, 2)
+  date           DateTime @default(now())
+  isBilled       Boolean  @default(false)
+  invoiceId      String?
+  customerId     String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([organizationId])
+  @@map("time_entries")
+}
