@@ -1,10 +1,11 @@
-// ─── NextAuth v5 Config ───────────────────────────────────────────────────────
 import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import { PrismaAdapter } from "@auth/prisma-adapter";
-import { prisma } from "@/lib/prisma";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
+
+import { prisma } from "@/lib/prisma";
+import { authConfig } from "@/lib/auth.config";
 
 const loginSchema = z.object({
   email: z.string().email(),
@@ -12,12 +13,9 @@ const loginSchema = z.object({
 });
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
+  ...authConfig,
   adapter: PrismaAdapter(prisma) as any,
   session: { strategy: "jwt" },
-  pages: {
-    signIn: "/login",
-    error: "/login",
-  },
   providers: [
     Credentials({
       credentials: {
@@ -50,6 +48,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     }),
   ],
   callbacks: {
+    ...authConfig.callbacks,
     async jwt({ token, user }) {
       if (user) {
         token.id = user.id as string;
@@ -71,7 +70,6 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   },
 });
 
-// ─── Helper to get the session server-side ────────────────────────────────────
 export async function getRequiredSession() {
   const session = await auth();
   if (!session?.user?.organizationId) {
